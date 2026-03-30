@@ -1,0 +1,59 @@
+[package]
+name = "license"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+migration = { path = "migration" }
+
+sea-orm = { version = "1.1", features = [
+    "sqlx-sqlite",
+    "runtime-tokio-rustls",
+    "macros",
+    "with-chrono",
+    "with-uuid",
+] }
+
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tower = { version = "0.5", features = ["util", "limit"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+tower_governor = "0.8"
+teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
+
+wreq = { version = "5.3", features = ["json"] }
+wreq-util = { version = "2.2" }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+scraper = { version = "0.25" }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+serde = { version = "1", features = ["derive"] }
+json = { package = "serde_json", version = "1" }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.19", features = ["v4", "serde"] }
+base64 = { version = "0.22.1" }
+
+dashmap = "6.1"
+thiserror = "2.0"
+dotenvy = "0.15"
+anyhow = "1.0"
+async-trait = "0.1"
+flate2 = "1.0"
+futures = "0.3"
+humantime = "2.1"
+libc = "0.2"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.14"
+
+[features]
+default = []
