@@ -1,0 +1,42 @@
+[package]
+name = "shai"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+shai-macros = { path = "../shai-macros", optional = true }
+
+rkyv = { workspace = true }
+bytes = { workspace = true }
+tower = { workspace = true, features = ["util", "limit"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+quinn = { workspace = true }
+rustls = { workspace = true }
+
+tracing = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+
+rustc-hash = { version = "2.1" }
+parking_lot = { version = "0.12" }
+
+[features]
+default = ["macros"]
+macros = ["shai-macros"]
+
+
+[dev-dependencies]
+criterion = { workspace = true }
+tokio = { workspace = true }
+rcgen = { workspace = true }
+
+
+[[bench]]
+name = "router"
+harness = false
+
+[[bench]]
+name = "frame_encode"
+harness = false

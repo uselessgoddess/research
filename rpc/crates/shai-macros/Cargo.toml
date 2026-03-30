@@ -1,0 +1,13 @@
+[package]
+name = "shai-macros"
+version = "0.0.0"
+edition = "2024"
+description = "Procedural macros for the shai RPC crate."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"
