@@ -4,7 +4,6 @@ mod spoof;
 use clap::{Parser, Subcommand};
 
 use container::session::SteamSession;
-use container::steam_auth::SteamCredentials;
 use container::update::UpdateConfig;
 
 #[derive(Parser)]
@@ -200,13 +199,6 @@ enum Commands {
         json: bool,
     },
 
-    /// Generate a Steam Guard TOTP code from a shared secret
-    SteamGuardCode {
-        /// Base64-encoded shared_secret
-        #[arg(long)]
-        shared_secret: String,
-    },
-
     /// Full auto-start: login to Steam, inject session, configure library, start CS2
     AutoStart {
         /// Container name
@@ -315,7 +307,6 @@ fn main() {
             shared_secret,
             json,
         } => cmd_steam_login(&username, &password, shared_secret.as_deref(), json),
-        Commands::SteamGuardCode { shared_secret } => cmd_steam_guard_code(&shared_secret),
         Commands::AutoStart {
             name,
             username,
@@ -550,7 +541,7 @@ fn cmd_show_identity(name: &str) {
 fn cmd_inject_session(name: &str, account: &str, token: &str, steam_id: &str, persona: &str) {
     let sess = SteamSession {
         account_name: account.to_string(),
-        refresh_token: token.to_string(),
+        token: token.to_string(),
         steam_id: steam_id.to_string(),
         persona_name: persona.to_string(),
     };
@@ -566,7 +557,7 @@ fn cmd_inject_session(name: &str, account: &str, token: &str, steam_id: &str, pe
 fn cmd_switch_account(name: &str, account: &str, token: &str, steam_id: &str, persona: &str) {
     let sess = SteamSession {
         account_name: account.to_string(),
-        refresh_token: token.to_string(),
+        token: token.to_string(),
         steam_id: steam_id.to_string(),
         persona_name: persona.to_string(),
     };
@@ -647,7 +638,7 @@ fn cmd_screenshot(name: &str, output: &str) {
 }
 
 fn cmd_steam_login(username: &str, password: &str, shared_secret: Option<&str>, json: bool) {
-    let creds = SteamCredentials {
+    let creds = container::steam_auth::SteamCredentials {
         username: username.to_string(),
         password: password.to_string(),
         shared_secret: shared_secret.map(String::from),
@@ -663,21 +654,11 @@ fn cmd_steam_login(username: &str, password: &str, shared_secret: Option<&str>, 
                 println!("Login successful!");
                 println!("  Account:       {}", result.account_name);
                 println!("  Steam ID:      {}", result.steam_id);
-                println!("  Refresh Token: {}", result.refresh_token);
+                println!("  Access Token:  {}...", &result.access_token[..20.min(result.access_token.len())]);
             }
         }
         Err(e) => {
             eprintln!("Steam login failed: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_steam_guard_code(shared_secret: &str) {
-    match container::steam_auth::generate_steam_guard_code(shared_secret, 0) {
-        Ok(code) => println!("{code}"),
-        Err(e) => {
-            eprintln!("Failed to generate Steam Guard code: {e}");
             std::process::exit(1);
         }
     }
@@ -691,8 +672,8 @@ fn cmd_auto_start(
     persona: &str,
     cs2_mount: &str,
 ) {
-    // Step 1: Login to Steam to get refresh token
-    let creds = SteamCredentials {
+    // Step 1: Login to Steam to get access token
+    let creds = container::steam_auth::SteamCredentials {
         username: username.to_string(),
         password: password.to_string(),
         shared_secret: shared_secret.map(String::from),
@@ -724,7 +705,7 @@ fn cmd_auto_start(
     println!("[3/3] Injecting session into container '{name}'...");
     let sess = SteamSession {
         account_name: login_result.account_name.clone(),
-        refresh_token: login_result.refresh_token,
+        token: login_result.access_token,
         steam_id: login_result.steam_id,
         persona_name: persona.to_string(),
     };

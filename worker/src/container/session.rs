@@ -12,7 +12,7 @@ pub enum SessionError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SteamSession {
     pub account_name: String,
-    pub refresh_token: String,
+    pub token: String,
     pub steam_id: String,
     pub persona_name: String,
 }
@@ -50,7 +50,7 @@ pub fn generate_config_vdf(session: &SteamSession) -> String {
 }}"#,
         account = session.account_name,
         steam_id = session.steam_id,
-        token = session.refresh_token,
+        token = session.token,
     )
 }
 
@@ -136,7 +136,7 @@ mod tests {
     fn sample_session() -> SteamSession {
         SteamSession {
             account_name: "testuser123".into(),
-            refresh_token: "eyJhbGciOiJFZERTQSJ9.test_token_data".into(),
+            token: "eyJhbGciOiJFZERTQSJ9.test_token_data".into(),
             steam_id: "76561198012345678".into(),
             persona_name: "TestPlayer".into(),
         }
@@ -194,7 +194,7 @@ mod tests {
     fn test_sample_session_is_valid() {
         let session = sample_session();
         assert!(!session.account_name.is_empty());
-        assert!(!session.refresh_token.is_empty());
+        assert!(!session.token.is_empty());
         assert!(!session.steam_id.is_empty());
     }
 
