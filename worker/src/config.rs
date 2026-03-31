@@ -192,6 +192,7 @@ mod tests {
             hw,
             virtiofs_source: Some("/opt/cs2".into()),
             virtiofs_tag: Some("cs2".into()),
+            cloud_init_iso: None,
         }
     }
 
@@ -239,8 +240,8 @@ mod tests {
         cfg.virtiofs_tag = None;
         let xml = cfg.to_xml();
         assert!(!xml.contains("type='virtiofs'"));
-        // No memory backing without virtiofs
-        assert!(!xml.contains("<memoryBacking>"));
+        // Memory backing always present (required for Venus GPU + virtiofs DAX)
+        assert!(xml.contains("<memoryBacking>"));
     }
 
     #[test]
@@ -260,7 +261,7 @@ mod tests {
     fn test_xml_is_parseable() {
         let xml = sample_config().to_xml();
         // Basic well-formedness: starts and ends correctly
-        assert!(xml.starts_with("<domain type='kvm'>"));
+        assert!(xml.starts_with("<domain type='kvm'"));
         assert!(xml.trim().ends_with("</domain>"));
     }
 

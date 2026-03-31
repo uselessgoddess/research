@@ -52,10 +52,12 @@ fn default_packages() -> Vec<String> {
         "qemu-guest-agent",
         "steam-installer",
         "mesa-vulkan-drivers",
-        "vulkan-tools",      // Добавлено: утилиты для дебага (vulkaninfo)
-        "mesa-utils",  
-        "gamescope", // Wayland микро-композитор
-        "xwayland",  // Прослойка для Steam
+        "vulkan-tools",      // Утилиты для дебага (vulkaninfo)
+        "mesa-utils",
+        "sway",              // Wayland композитор (замена gamescope)
+        "wayvnc",            // VNC-сервер для Wayland/sway
+        "xwayland",          // Прослойка для Steam (X11 на Wayland)
+        "foot",              // Лёгкий Wayland-терминал для отладки
         "dmidecode",
         "lsblk",
         "curl",
@@ -105,15 +107,93 @@ packages:
   - mesa-vulkan-drivers
   - vulkan-tools
   - mesa-utils
-  - gamescope
+  - sway
+  - wayvnc
   - xwayland
+  - foot
   - dmidecode
 
 runcmd:
   # Включаем guest-agent
   - systemctl enable --now qemu-guest-agent
 
+  # FIX: Перемонтируем /tmp на диск, чтобы Steam не крашил VM при распаковке.
+  # По умолчанию в cloud-образах /tmp — tmpfs (в RAM). Steam при первом запуске
+  # распаковывает ~1.5GB runtime-пакетов через /tmp. Это создаёт пиковое давление
+  # на память: tmpfs + распаковка + сам процесс Steam. При 10GB RAM это может
+  # вызвать OOM и крэш VM. Решение: /tmp на диске.
+  - |
+    if findmnt -n -o FSTYPE /tmp | grep -q tmpfs; then
+      systemctl mask tmp.mount
+      umount /tmp || true
+      mkdir -p /tmp
+      chmod 1777 /tmp
+    fi
+
+  # FIX: Steam silent install — обход графического диалога подтверждения.
+  # steam-installer зависит от debconf и zenity для показа EULA.
+  # Предварительно принимаем лицензию через debconf-set-selections.
+  - echo 'steam steam/question select I AGREE' | debconf-set-selections
+  - echo 'steam steam/license note ' | debconf-set-selections
   - DEBIAN_FRONTEND=noninteractive apt-get install -y steam-installer
+
+  # Создаём конфиг sway с Mod1 (Alt) вместо Mod4 (Super),
+  # чтобы не конфликтовать с хостовым WM при доступе через VNC.
+  - mkdir -p /home/{user}/.config/sway
+  - |
+    cat > /home/{user}/.config/sway/config << 'SWAYCONFIG'
+    # Sway config for CS2 farming VM
+    # Используем Alt (Mod1) вместо Super (Mod4), чтобы не конфликтовать с хостом.
+    set $mod Mod1
+
+    # Терминал для ручного тестирования
+    set $term foot
+    bindsym $mod+Return exec $term
+
+    # Закрыть окно
+    bindsym $mod+Shift+q kill
+
+    # Фокус
+    bindsym $mod+Left focus left
+    bindsym $mod+Down focus down
+    bindsym $mod+Up focus up
+    bindsym $mod+Right focus right
+
+    # Перемещение окон
+    bindsym $mod+Shift+Left move left
+    bindsym $mod+Shift+Down move down
+    bindsym $mod+Shift+Up move up
+    bindsym $mod+Shift+Right move right
+
+    # Рабочие столы
+    bindsym $mod+1 workspace number 1
+    bindsym $mod+2 workspace number 2
+    bindsym $mod+Shift+1 move container to workspace number 1
+    bindsym $mod+Shift+2 move container to workspace number 2
+
+    # Полноэкранный режим
+    bindsym $mod+f fullscreen toggle
+
+    # Перезагрузить sway
+    bindsym $mod+Shift+c reload
+
+    # Выход из sway
+    bindsym $mod+Shift+e exec swaynag -t warning -m 'Exit sway?' -B 'Yes' 'swaymsg exit'
+
+    # Отключаем title bars для максимизации области CS2
+    default_border none
+    default_floating_border none
+
+    # Запускаем wayvnc на старте для удалённого доступа
+    exec wayvnc --output '*' 0.0.0.0 5900
+
+    # XWayland для Steam
+    xwayland enable
+
+    # Устанавливаем разрешение виртуального дисплея
+    output Virtual-1 mode 384x288
+    SWAYCONFIG
+  - chown -R {user}:{user} /home/{user}/.config
 
   # Создаем скрипт запуска Steam
   - mkdir -p /opt/farm
@@ -125,6 +205,10 @@ runcmd:
     done
     rm -f /home/{user}/.steam/steam/config/.ready
 
+    # FIX: Направляем TMPDIR Steam на диск, а не в tmpfs,
+    # чтобы избежать OOM при распаковке обновлений
+    export TMPDIR=/var/tmp
+
     # Запускаем Steam и сразу стартуем CS2 (app 730)
     # -nosound: отключаем звук для экономии ресурсов
     # -novid: пропускаем заставку
@@ -134,25 +218,48 @@ runcmd:
   - chmod +x /opt/farm/steam-launcher.sh
   - chown {user}:{user} /opt/farm/steam-launcher.sh
 
-  # Создаем systemd сервис для Gamescope
+  # Создаем systemd сервис для sway (Wayland-композитор)
   - |
-    cat > /etc/systemd/system/steam-farm.service << 'SERVICE'
+    cat > /etc/systemd/system/sway-session.service << 'SERVICE'
     [Unit]
-    Description=Steam CS2 Farming Session (Gamescope)
+    Description=Sway Wayland Compositor Session
     After=network.target
 
     [Service]
     Type=simple
     User={user}
     Environment=XDG_RUNTIME_DIR=/run/user/1000
-    
-    # Создаем директорию для Wayland-сокетов (т.к. мы запускаем сервис вне сессии пользователя)
+    Environment=WLR_BACKENDS=drm
+    Environment=WLR_RENDERER=vulkan
+    Environment=TMPDIR=/var/tmp
+
+    # Создаем директорию для Wayland-сокетов
     ExecStartPre=/bin/mkdir -p /run/user/1000
     ExecStartPre=/bin/chown {user}:{user} /run/user/1000
     ExecStartPre=/bin/chmod 0700 /run/user/1000
 
-    # Запускаем Gamescope с лимитом 20 FPS
-    ExecStart=/usr/bin/gamescope -w 384 -h 288 -W 384 -H 288 -r 20 -e -- /opt/farm/steam-launcher.sh
+    ExecStart=/usr/bin/sway
+    Restart=on-failure
+    RestartSec=10
+
+    [Install]
+    WantedBy=multi-user.target
+    SERVICE
+  - |
+    cat > /etc/systemd/system/steam-farm.service << 'SERVICE'
+    [Unit]
+    Description=Steam CS2 Farming Session
+    After=sway-session.service
+    Requires=sway-session.service
+
+    [Service]
+    Type=simple
+    User={user}
+    Environment=XDG_RUNTIME_DIR=/run/user/1000
+    Environment=WAYLAND_DISPLAY=wayland-1
+    Environment=TMPDIR=/var/tmp
+
+    ExecStart=/opt/farm/steam-launcher.sh
     Restart=on-failure
     RestartSec=10
 
@@ -160,6 +267,7 @@ runcmd:
     WantedBy=multi-user.target
     SERVICE
   - systemctl daemon-reload
+  - systemctl enable sway-session.service
   - systemctl enable steam-farm.service
 
   # Монтируем общую папку CS2
@@ -167,7 +275,7 @@ runcmd:
   - |
     echo 'cs2 /opt/cs2 virtiofs defaults,nofail 0 0' >> /etc/fstab
 
-final_message: "CS2 farm VM provisioning complete (Gamescope No-Sound Mode)"
+final_message: "CS2 farm VM provisioning complete (Sway + wayvnc)"
 "#,
         user = farm_user,
         password = farm_password,
@@ -305,8 +413,10 @@ mod tests {
         assert!(pkgs.contains(&"qemu-guest-agent".to_string()));
         assert!(pkgs.contains(&"steam-installer".to_string()));
         assert!(pkgs.contains(&"mesa-vulkan-drivers".to_string()));
-        assert!(pkgs.contains(&"gamescope".to_string())); // Изменено с openbox
+        assert!(pkgs.contains(&"sway".to_string()));
+        assert!(pkgs.contains(&"wayvnc".to_string()));
         assert!(pkgs.contains(&"dmidecode".to_string()));
+        assert!(!pkgs.contains(&"gamescope".to_string()));
     }
 
     #[test]
@@ -317,6 +427,34 @@ mod tests {
         assert!(ud.contains("qemu-guest-agent"));
         assert!(ud.contains("steam-farm.service"));
         assert!(ud.contains("steam-launcher.sh"));
+        assert!(ud.contains("sway-session.service"));
+    }
+
+    #[test]
+    fn test_cloud_init_userdata_sway_config() {
+        let ud = generate_cloud_init_userdata("farmuser", "pass");
+        // Sway вместо gamescope
+        assert!(ud.contains("sway/config"));
+        assert!(ud.contains("set $mod Mod1")); // Alt, не Super
+        assert!(ud.contains("wayvnc"));
+        assert!(!ud.contains("gamescope"));
+    }
+
+    #[test]
+    fn test_cloud_init_userdata_steam_silent_install() {
+        let ud = generate_cloud_init_userdata("farmuser", "pass");
+        // debconf pre-seeding для обхода графического диалога Steam
+        assert!(ud.contains("debconf-set-selections"));
+        assert!(ud.contains("I AGREE"));
+        assert!(ud.contains("DEBIAN_FRONTEND=noninteractive"));
+    }
+
+    #[test]
+    fn test_cloud_init_userdata_tmp_fix() {
+        let ud = generate_cloud_init_userdata("farmuser", "pass");
+        // /tmp должен быть на диске, не в tmpfs
+        assert!(ud.contains("tmp.mount"));
+        assert!(ud.contains("TMPDIR=/var/tmp"));
     }
 
     #[test]
@@ -337,7 +475,7 @@ mod tests {
     fn test_base_image_config_default() {
         let cfg = BaseImageConfig::default();
         assert!(!cfg.prepared);
-        assert_eq!(cfg.os_type, "debian-14");
+        assert_eq!(cfg.os_type, "ubuntu-26.04");
         assert!(!cfg.packages.is_empty());
     }
 
