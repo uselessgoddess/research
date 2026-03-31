@@ -73,7 +73,7 @@ wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.i
   -O /var/lib/vmctl/base/ubuntu-22.04.qcow2
 
 # Generate cloud-init ISO for automatic VM provisioning
-# This installs qemu-guest-agent, Steam, mesa/Vulkan, OpenBox, and systemd services
+# This installs qemu-guest-agent, Steam, mesa/Vulkan, sway, wayvnc, and systemd services
 ./target/release/worker cloud-init \
   --output /var/lib/vmctl/base/cloud-init.iso \
   --vm-name cs2-farm-0 \
@@ -84,8 +84,12 @@ wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.i
 The cloud-init ISO auto-configures:
 - Farm user with sudo access
 - `qemu-guest-agent` (for host-to-guest communication)
-- Steam + mesa Vulkan drivers
-- X11 + OpenBox (minimal WM)
+- Steam + mesa Vulkan drivers (silent install via debconf pre-seeding)
+- Sway (Wayland compositor) + wayvnc (VNC server for remote access)
+- Sway config with `Mod1` (Alt) modifier to avoid conflict with host Super key
+- `/tmp` remounted from tmpfs to disk (prevents OOM crash during Steam extraction)
+- `TMPDIR=/var/tmp` for Steam (prevents tmpfs memory pressure during updates)
+- `sway-session.service` (Wayland compositor)
 - `steam-farm.service` (auto-starts Steam when session files are injected)
 - virtiofs mount point at `/opt/cs2`
 
@@ -140,8 +144,14 @@ The cloud-init ISO auto-configures:
 
 #### Connect via VNC (for manual testing)
 ```bash
-# VNC is on localhost:<vnc_port> (e.g., 5901 for first VM)
+# QEMU VNC (framebuffer, always available): localhost:<vnc_port>
 vncviewer localhost:5901
+
+# wayvnc (Wayland-native, inside sway session): guest_ip:5900
+# wayvnc runs automatically inside the VM via sway config.
+# Access it through the guest network or via SSH tunnel:
+ssh -L 5900:localhost:5900 farmuser@<vm_ip>
+vncviewer localhost:5900
 ```
 
 ### 7. Verify hardware spoofing
