@@ -27,7 +27,7 @@ pub enum ImageError {
 pub struct BaseImageConfig {
     /// Path to the qcow2 base image.
     pub image_path: String,
-    /// OS type (e.g., "debian-12", "ubuntu-22.04").
+    /// OS type (e.g., "debian-14", "ubuntu-26.04").
     pub os_type: String,
     /// Packages to install during image preparation.
     pub packages: Vec<String>,
@@ -38,8 +38,8 @@ pub struct BaseImageConfig {
 impl Default for BaseImageConfig {
     fn default() -> Self {
         Self {
-            image_path: "/var/lib/vmctl/base/cs2-farm-base.qcow2".into(),
-            os_type: "debian-12".into(),
+            image_path: "/var/lib/vmctl/base/ubuntu-26.04.qcow2".into(),
+            os_type: "ubuntu-26.04".into(),
             packages: default_packages(),
             prepared: false,
         }
@@ -52,10 +52,10 @@ fn default_packages() -> Vec<String> {
         "qemu-guest-agent",
         "steam-installer",
         "mesa-vulkan-drivers",
-        "xserver-xorg-core",
-        "openbox",
-        "xinit",
-        "pulseaudio",
+        "vulkan-tools",      // Добавлено: утилиты для дебага (vulkaninfo)
+        "mesa-utils",  
+        "gamescope", // Wayland микро-композитор
+        "xwayland",  // Прослойка для Steam
         "dmidecode",
         "lsblk",
         "curl",
@@ -67,75 +67,92 @@ fn default_packages() -> Vec<String> {
 }
 
 /// Generate cloud-init user-data YAML for automatic VM provisioning.
-///
-/// This creates a cloud-init config that:
-/// - Sets up a farm user
-/// - Installs required packages
-/// - Enables qemu-guest-agent
-/// - Configures auto-login to X11 + OpenBox
-/// - Creates a systemd service for Steam auto-start
 pub fn generate_cloud_init_userdata(farm_user: &str, farm_password: &str) -> String {
     format!(
         r#"#cloud-config
 hostname: cs2-farm-vm
 manage_etc_hosts: true
 
+growpart:
+  mode: auto
+
 users:
   - name: {user}
-    groups: [sudo, video, audio, render]
+    groups: [sudo, video, render]
     shell: /bin/bash
     lock_passwd: false
     plain_text_passwd: "{password}"
     sudo: ALL=(ALL) NOPASSWD:ALL
 
+apt:
+  sources:
+    multiverse:
+      source: "deb http://archive.ubuntu.com/ubuntu/ $RELEASE multiverse"
+    multiverse-updates:
+      source: "deb http://archive.ubuntu.com/ubuntu/ $RELEASE-updates multiverse"
+    multiverse-security:
+      source: "deb http://security.ubuntu.com/ubuntu/ $RELEASE-security multiverse"
+
+bootcmd:
+  - sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& console=ttyS0/' /etc/default/grub
+  - update-grub
+  - dpkg --add-architecture i386
+  - apt-get update
+
 package_update: true
 packages:
   - qemu-guest-agent
-  - steam-installer
   - mesa-vulkan-drivers
-  - xserver-xorg-core
-  - openbox
-  - xinit
-  - pulseaudio
+  - vulkan-tools
+  - mesa-utils
+  - gamescope
+  - xwayland
   - dmidecode
 
 runcmd:
-  # Enable and start guest agent
-  - systemctl enable qemu-guest-agent
-  - systemctl start qemu-guest-agent
+  # Включаем guest-agent
+  - systemctl enable --now qemu-guest-agent
 
-  # Create steam launcher script
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y steam-installer
+
+  # Создаем скрипт запуска Steam
+  - mkdir -p /opt/farm
   - |
     cat > /opt/farm/steam-launcher.sh << 'LAUNCHER'
     #!/bin/bash
-    # Wait for session files to be injected via guest agent
     while [ ! -f /home/{user}/.steam/steam/config/.ready ]; do
         sleep 2
     done
     rm -f /home/{user}/.steam/steam/config/.ready
 
-    # Launch Steam in silent mode with minimal UI
+    # Запускаем Steam и сразу стартуем CS2 (app 730)
+    # -nosound: отключаем звук для экономии ресурсов
+    # -novid: пропускаем заставку
     exec steam -silent -no-browser -console \
-        -w 384 -h 288 \
-        +connect_lobby default
+        -applaunch 730 -nosound -novid -windowed -w 384 -h 288 +connect_lobby default
     LAUNCHER
-  - mkdir -p /opt/farm
   - chmod +x /opt/farm/steam-launcher.sh
   - chown {user}:{user} /opt/farm/steam-launcher.sh
 
-  # Create systemd service for Steam auto-launch
+  # Создаем systemd сервис для Gamescope
   - |
     cat > /etc/systemd/system/steam-farm.service << 'SERVICE'
     [Unit]
-    Description=Steam CS2 Farming Session
-    After=network.target display-manager.service
+    Description=Steam CS2 Farming Session (Gamescope)
+    After=network.target
 
     [Service]
     Type=simple
     User={user}
-    Environment=DISPLAY=:0
-    Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-    ExecStart=/opt/farm/steam-launcher.sh
+    Environment=XDG_RUNTIME_DIR=/run/user/1000
+    
+    # Создаем директорию для Wayland-сокетов (т.к. мы запускаем сервис вне сессии пользователя)
+    ExecStartPre=/bin/mkdir -p /run/user/1000
+    ExecStartPre=/bin/chown {user}:{user} /run/user/1000
+    ExecStartPre=/bin/chmod 0700 /run/user/1000
+
+    # Запускаем Gamescope с лимитом 20 FPS
+    ExecStart=/usr/bin/gamescope -w 384 -h 288 -W 384 -H 288 -r 20 -e -- /opt/farm/steam-launcher.sh
     Restart=on-failure
     RestartSec=10
 
@@ -145,32 +162,12 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable steam-farm.service
 
-  # Auto-start X11 with OpenBox on boot
-  - |
-    cat > /etc/systemd/system/x11-auto.service << 'XSERVICE'
-    [Unit]
-    Description=Auto-start X11 with OpenBox
-    After=systemd-user-sessions.service
-
-    [Service]
-    Type=simple
-    User={user}
-    ExecStart=/usr/bin/startx /usr/bin/openbox-session -- :0 vt7
-    Restart=on-failure
-    RestartSec=5
-
-    [Install]
-    WantedBy=graphical.target
-    XSERVICE
-  - systemctl daemon-reload
-  - systemctl enable x11-auto.service
-
-  # Create virtiofs mount point for shared CS2 installation
+  # Монтируем общую папку CS2
   - mkdir -p /opt/cs2
   - |
     echo 'cs2 /opt/cs2 virtiofs defaults,nofail 0 0' >> /etc/fstab
 
-final_message: "CS2 farm VM provisioning complete"
+final_message: "CS2 farm VM provisioning complete (Gamescope No-Sound Mode)"
 "#,
         user = farm_user,
         password = farm_password,
@@ -274,9 +271,7 @@ pub fn compress_image(input_path: &str, output_path: &str) -> Result<(), ImageEr
     }
 
     let output = Command::new("qemu-img")
-        .args([
-            "convert", "-c", "-O", "qcow2", input_path, output_path,
-        ])
+        .args(["convert", "-c", "-O", "qcow2", input_path, output_path])
         .output()
         .map_err(|e| ImageError::Command {
             cmd: "qemu-img convert".into(),
@@ -310,7 +305,7 @@ mod tests {
         assert!(pkgs.contains(&"qemu-guest-agent".to_string()));
         assert!(pkgs.contains(&"steam-installer".to_string()));
         assert!(pkgs.contains(&"mesa-vulkan-drivers".to_string()));
-        assert!(pkgs.contains(&"openbox".to_string()));
+        assert!(pkgs.contains(&"gamescope".to_string())); // Изменено с openbox
         assert!(pkgs.contains(&"dmidecode".to_string()));
     }
 
@@ -342,7 +337,7 @@ mod tests {
     fn test_base_image_config_default() {
         let cfg = BaseImageConfig::default();
         assert!(!cfg.prepared);
-        assert_eq!(cfg.os_type, "debian-12");
+        assert_eq!(cfg.os_type, "debian-14");
         assert!(!cfg.packages.is_empty());
     }
 

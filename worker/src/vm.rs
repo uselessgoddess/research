@@ -43,6 +43,7 @@ fn parse_state(s: &str) -> VmState {
 
 fn virsh(args: &[&str]) -> Result<String, VmError> {
     let output = Command::new("virsh")
+        .args(["-c", "qemu:///system"])
         .args(args)
         .output()
         .map_err(|e| VmError::Virsh(e.to_string()))?;

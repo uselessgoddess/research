@@ -324,11 +324,7 @@ fn cmd_check_deps() {
     if errors.is_empty() {
         println!("All dependencies satisfied.");
     } else {
-        println!(
-            "{} check(s) passed, {} failed.",
-            ok.len(),
-            errors.len()
-        );
+        println!("{} check(s) passed, {} failed.", ok.len(), errors.len());
         std::process::exit(1);
     }
 }
@@ -347,7 +343,10 @@ fn cmd_create(
     let hw = spoof::generate_identity(name);
     println!("Generated identity for '{name}':");
     println!("  MAC:    {}", hw.mac_address);
-    println!("  SMBIOS: {} / {}", hw.smbios_manufacturer, hw.smbios_product);
+    println!(
+        "  SMBIOS: {} / {}",
+        hw.smbios_manufacturer, hw.smbios_product
+    );
     println!("  Serial: {}", hw.smbios_serial);
     println!("  Disk:   {} ({})", hw.disk_model, hw.disk_serial);
 
@@ -365,6 +364,11 @@ fn cmd_create(
         }
     }
 
+    if let Err(e) = image::resize_image(&overlay_path, "10G") {
+        eprintln!("Failed to resize disk: {e}");
+        std::process::exit(1);
+    }
+
     // Generate and define XML
     let cfg = config::VmConfig {
         name: name.to_string(),
@@ -379,6 +383,7 @@ fn cmd_create(
         } else {
             None
         },
+        cloud_init_iso: Some("/var/lib/vmctl/base/cloud-init.iso".into()),
     };
 
     let xml = cfg.to_xml();

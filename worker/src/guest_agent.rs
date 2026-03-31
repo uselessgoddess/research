@@ -42,7 +42,7 @@ pub struct GuestInterface {
 /// Send a raw guest-agent command via virsh and return the JSON response.
 fn ga_command(vm_name: &str, json_cmd: &str) -> Result<String, GuestAgentError> {
     let output = Command::new("virsh")
-        .args(["qemu-agent-command", vm_name, json_cmd])
+        .args(["-c", "qemu:///system", "qemu-agent-command", vm_name, json_cmd])
         .output()
         .map_err(|e| GuestAgentError::Virsh(e.to_string()))?;
 

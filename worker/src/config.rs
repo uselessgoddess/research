@@ -11,6 +11,7 @@ pub struct VmConfig {
     pub hw: HwIdentity,
     pub virtiofs_source: Option<String>,
     pub virtiofs_tag: Option<String>,
+    pub cloud_init_iso: Option<String>,
 }
 
 impl VmConfig {
@@ -37,20 +38,31 @@ impl VmConfig {
             _ => String::new(),
         };
 
-        // Memory backing is required for virtiofs
-        let memory_backing_xml = if self.virtiofs_source.is_some() {
+        let memory_backing_xml =  {
             r#"
   <memoryBacking>
     <source type='memfd'/>
     <access mode='shared'/>
   </memoryBacking>
 "#
-        } else {
-            ""
+        };
+
+        let cloud_init_xml = match &self.cloud_init_iso {
+            Some(path) => format!(
+                r#"
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='{}'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+    </disk>"#,
+                path
+            ),
+            None => String::new(),
         };
 
         format!(
-            r#"<domain type='kvm'>
+            r#"<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>{name}</name>
   <memory unit='MiB'>{ram}</memory>
   <vcpu placement='static'>{vcpus}</vcpu>
@@ -88,12 +100,23 @@ impl VmConfig {
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
 
+    <serial type='pty'>
+      <target type='isa-serial' port='0'>
+        <model name='isa-serial'/>
+      </target>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' discard='unmap'/>
       <source file='{disk}'/>
       <target dev='vda' bus='virtio'/>
       <serial>{disk_serial}</serial>
     </disk>
+
+{cloud_init}
 
     <interface type='network'>
       <mac address='{mac}'/>
@@ -102,8 +125,13 @@ impl VmConfig {
     </interface>
 
     <graphics type='vnc' port='{vnc_port}' autoport='no' listen='127.0.0.1'/>
+    <graphics type='egl-headless'>
+      <gl rendernode='/dev/dri/renderD128'/>
+    </graphics>
     <video>
-      <model type='virtio' heads='1'/>
+      <model type='virtio' heads='1' primary='yes' blob='on'>
+        <acceleration accel3d='yes'/>
+      </model>
     </video>
 
     <input type='tablet' bus='virtio'/>
@@ -113,8 +141,15 @@ impl VmConfig {
       <target type='virtio' name='org.qemu.guest_agent.0'/>
     </channel>
 
+    
     <memballoon model='none'/>
   </devices>
+ <qemu:commandline>
+    <qemu:arg value='-global'/>
+    <qemu:arg value='virtio-vga-gl.venus=on'/>
+    <qemu:arg value='-global'/>
+    <qemu:arg value='virtio-vga-gl.hostmem=536870912'/>
+  </qemu:commandline>
 </domain>"#,
             name = self.name,
             ram = self.ram_mb,
@@ -125,6 +160,7 @@ impl VmConfig {
             smbios_serial = xml_escape(&self.hw.smbios_serial),
             disk = self.disk_path,
             disk_serial = self.hw.disk_serial,
+            cloud_init = cloud_init_xml,
             mac = self.hw.mac_address,
             vnc_port = self.vnc_port,
             virtiofs = virtiofs_xml,
